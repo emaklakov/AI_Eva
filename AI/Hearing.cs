@@ -1,4 +1,5 @@
-﻿using CUETools.Codecs;
+﻿using AI.Pitch;
+using CUETools.Codecs;
 using CUETools.Codecs.FLAKE;
 using Microsoft.Speech.Recognition;
 using NAudio.Wave;
@@ -11,7 +12,6 @@ using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace AI
 {
@@ -20,12 +20,38 @@ namespace AI
     /// </summary>
     internal class Hearing
     {
+        bool _IsSayEva = false;
+        bool _IsStart = false;
+        Memory memory = new Memory();
         public delegate void dlHeardHerName();
+        public delegate void ErrorHeardEventHandler();
+        public delegate void HeardEventHandler(object sender, HeardEventArgs e);
         
         /// <summary>
         /// Событие возникает, когда Ева услышала свое имя
         /// </summary>
         public event dlHeardHerName HeardHerName;
+
+        /// <summary>
+        /// Событие возникает, когда Ева что-то услышала
+        /// </summary>
+        public event HeardEventHandler HeardEvent;
+
+        /// <summary>
+        /// Событие возникает, когда произходит ошибка при прослушивании
+        /// </summary>
+        public event ErrorHeardEventHandler ErrorHeard;
+
+        public bool IsSayEva
+        {
+            get { return _IsSayEva; }
+            set { _IsSayEva = value; }
+        }
+
+        public bool IsStart
+        {
+            get { return _IsStart; }
+        }
 
         public Hearing()
         {
@@ -34,33 +60,90 @@ namespace AI
 
         public void Start()
         {
-            //Thread thread = new Thread(delegate()
-            //{
-            //    StartRecording();
-            //});
-            //thread.Start();
+            Thread thread = new Thread(delegate()
+            {
+                StartRecording();
+            });
+            thread.Start();
 
-            StartRecording();
+            //StartRecording();
+            _IsStart = true;
         }
 
         private void StartRecording()
         {
             var micManager = new MicManager();
             micManager.HeardEvent += micManager_HeardEvent;
+            micManager.ErrorHeard += micManager_ErrorHeard;
+        }
+
+        void micManager_ErrorHeard()
+        {
+            if (ErrorHeard != null)
+            {
+                ErrorHeard();
+            }
         }
 
         void micManager_HeardEvent(object sender, HeardEventArgs e)
         {
             if (e.Text == "ева")
             {
+                memory.WhatSay = e.Text;
                 if (HeardHerName != null)
                 {
+                    IsSayEva = true;
                     HeardHerName();
                 }
             }
-        }
-
-        
+            else if (e.Text.EndsWith("ева"))
+            {
+                memory.WhatHeard = e.Text;
+                if (HeardEvent != null)
+                {
+                    switch (e.Text.Replace("ева", "").Trim())
+                    {
+                        case "привет":
+                            IsSayEva = true;
+                            HeardEvent(this, new HeardEventArgs("привет"));
+                            break;
+                        default:
+                            HeardEvent(this, new HeardEventArgs("Я не поняла, что Вы сказали."));
+                            break;
+                    }
+                }
+            }
+            else if (e.Text.StartsWith("ева"))
+            {
+                memory.WhatHeard = e.Text;
+                switch (e.Text.Replace("ева", "").Trim())
+                {
+                    case "ты тут":
+                        IsSayEva = true;
+                        if (HeardHerName != null)
+                        {
+                            IsSayEva = true;
+                            HeardHerName();
+                        }
+                        break;
+                    default:
+                        HeardEvent(this, new HeardEventArgs("Я не поняла, что Вы сказали."));
+                        break;
+                }
+            }
+            else
+            {
+                if (IsSayEva)
+                {
+                    memory.WhatHeard = e.Text;
+                    if (HeardEvent != null)
+                    {
+                        IsSayEva = false;
+                        HeardEvent(this, new HeardEventArgs(e.Text));
+                    }
+                }
+            }
+        } 
     }
 
     internal class MicManager
@@ -68,81 +151,95 @@ namespace AI
         private WaveInEvent waveInEvent;
         private WaveFileWriter waveStream;
         private MemoryStream waveStreamMemory;
-        public delegate void dlHeard();
-        
-        //edit the value of the variable accordingly
-        private double AudioThresh = 0.05;
+        private bool IsPresentVoice = false;
+        PitchTracker pitchTracker = new PitchTracker();
+
+        public delegate void ErrorHeardEventHandler();
+        public delegate void HeardEventHandler(object sender, HeardEventArgs e);
 
         /// <summary>
         /// Событие возникает, когда Ева что-то услышала
         /// </summary>
-        public delegate void HeardEventHandler(object sender, HeardEventArgs e);
-
-        // Declare the event.
         public event HeardEventHandler HeardEvent;
+
+        /// <summary>
+        /// Событие возникает, когда произходит ошибка при прослушивании
+        /// </summary>
+        public event ErrorHeardEventHandler ErrorHeard;
 
         public MicManager()
         {
+            pitchTracker.SampleRate = 16000.0;
+            pitchTracker.PitchDetected += pitchTracker_PitchDetected;
+
             waveInEvent = new WaveInEvent();
             waveInEvent.DataAvailable += WaveOnDataAvailable;
-            waveInEvent.WaveFormat = new WaveFormat(16000, 1); // 16kHz mono
+            waveInEvent.WaveFormat = new NAudio.Wave.WaveFormat(16000, 1); // 16kHz mono
             waveInEvent.StartRecording();
         }
 
-        private void WaveOnDataAvailable(object sender, WaveInEventArgs e)
+        public float[] ConvertByteToFloat(byte[] array)
         {
-            bool result = ProcessData(e);
-            if (result)
+            return array.Select(b => (float)b).ToArray();
+        }
+
+        void pitchTracker_PitchDetected(PitchTracker sender, PitchTracker.PitchRecord pitchRecord)
+        {
+            if (pitchRecord.Pitch > 0 && waveStreamMemory != null)
             {
-                if (waveStream == null)
+                byte[] tempBytes = Wav2Flac(waveStreamMemory);
+                JSon.RecognitionResult recResult = null;
+
+                if (tempBytes != null)
                 {
-                    waveStreamMemory = new MemoryStream();
-                    waveStream = new WaveFileWriter(waveStreamMemory, waveInEvent.WaveFormat);
-                    Log.Write("Ева начала Вас слушать.");
+                    //Передаем данные в Google и получаем результат
+                    recResult = JSon.Parse(GoogleSpeechRequest(tempBytes));
                 }
 
-                waveStream.Write(e.Buffer, 0, e.BytesRecorded);
-            }
-            else
-            {
-                if (waveStream != null)
+                waveStream.Close();
+                waveStreamMemory.Close();
+                waveStreamMemory = null;
+                waveStream = null;
+                IsPresentVoice = false;
+
+                // Проверяем, что полученные от Google данные - коректны
+                if (recResult != null && recResult.hypotheses != null)
                 {
-                    
-                    //Передаем данные в Google и получаем результат
-                    JSon.RecognitionResult recResult = JSon.Parse(GoogleSpeechRequest(Wav2Flac(waveStreamMemory)));
-
-                    waveStream.Close();
-                    waveStreamMemory.Close();
-                    waveStreamMemory = null;
-                    waveStream = null;
-
-                    if (recResult != null && recResult.hypotheses != null)
+                    IsPresentVoice = false;
+                    //Log.Write("Ева закончила Вас слушать.", Log.Category.Information);
+                    if (recResult.status == "0")
                     {
-                        if (recResult.status == "0")
+                        foreach (var item in recResult.hypotheses)
                         {
-                            foreach (var item in recResult.hypotheses)
+                            if (item.confidence > 0.5)
                             {
-                                if (item.confidence > 0.5)
+                                if (HeardEvent != null)
                                 {
-                                    if (HeardEvent != null)
-                                    {
-                                        HeardEvent(this, new HeardEventArgs(item.utterance));
-                                    }
+                                    HeardEvent(this, new HeardEventArgs(item.utterance));
+                                }
+                            }
+                            else if (item.utterance == "ева")
+                            {
+                                if (HeardEvent != null)
+                                {
+                                    HeardEvent(this, new HeardEventArgs(item.utterance));
                                 }
                             }
                         }
                     }
-
-                    Log.Write("Ева закончила Вас слушать.");
                 }
             }
         }
 
-        //calculate the sound level based on the AudioThresh
-        private bool ProcessData(WaveInEventArgs e)
+        private void WaveOnDataAvailable(object sender, WaveInEventArgs e)
         {
-            bool result = false;
+            VoiceDetection(e);
+        }
 
+        private void VoiceDetection(WaveInEventArgs e)
+        {
+            double AudioThresh = 0.2;
+            bool result = false;
             bool Tr = false;
             double Sum2 = 0;
             int Count = e.BytesRecorded / 2;
@@ -161,40 +258,63 @@ namespace AI
             {
                 result = true;
             }
+
+            if (result)
+            {
+                if (waveStream == null)
+                {
+                    waveStreamMemory = new MemoryStream();
+                    waveStream = new WaveFileWriter(waveStreamMemory, waveInEvent.WaveFormat);
+                }
+
+                waveStream.Write(e.Buffer, 0, e.BytesRecorded);
+                IsPresentVoice = true;
+            }
             else
             {
-                result = false;
+                if (waveStream != null && waveStreamMemory != null)
+                {
+                    // Был ли голос в записи
+                    if (IsPresentVoice)
+                    {
+                        pitchTracker.ProcessBuffer(ConvertByteToFloat(waveStreamMemory.ToArray()));
+                    }
+                }
             }
-            return result;
         }
 
         private byte[] Wav2Flac(MemoryStream waveStreamMemory)
         {
-            if (waveStreamMemory.Length >= 16000)
+            if (waveStreamMemory.Length >= 3200) // 0
             {
+                Log.Write("Ева услышала Вас.", Log.Category.Information);
+                byte[] Array = null;
+
                 WaveFileWriter writer = new WaveFileWriter("C:\\rec_temp.wav", waveInEvent.WaveFormat);
                 writer.Write(waveStreamMemory.ToArray(), 0, waveStreamMemory.ToArray().Length);
                 writer.Close();
 
                 IAudioSource audioSource = new WAVReader("C:\\rec_temp.wav", null);
-                //AudioPCMConfig audioPCMConfig = new AudioPCMConfig(16, 1, 16000);
-                //AudioBuffer buff = new AudioBuffer(audioPCMConfig, waveStreamMemory.ToArray(), 0);
+                AudioPCMConfig audioPCMConfig = new AudioPCMConfig(16, 1, 16000);
 
-                //FlakeWriter flakewriter = new FlakeWriter("C:\\rec_temp.flac", waveStreamMemory, audioPCMConfig);
                 AudioBuffer buff = new AudioBuffer(audioSource, 0x10000);
+                //AudioBuffer buffMemory = new AudioBuffer(audioPCMConfig, waveStreamMemory.ToArray(), Convert.ToInt32(waveStreamMemory.Length) / audioPCMConfig.BlockAlign);
 
-                FlakeWriter flakewriter = new FlakeWriter("C:\\rec_temp.flac", audioSource.PCM);
+                FlakeWriter flakewriter = new FlakeWriter(null, audioSource.PCM);
 
                 FlakeWriter audioDest = flakewriter;
                 while (audioSource.Read(buff, -1) != 0)
                 {
                     audioDest.Write(buff);
                 }
-                audioDest.Close();
+
+                if (flakewriter.BufferMemory != null)
+                {
+                    Array = flakewriter.BufferMemory.ToArray();
+                }
+
                 audioDest.Close();
                 audioSource.Close();
-
-                byte[] Array = File.ReadAllBytes("C:\\rec_temp.flac");
 
                 return Array;
             }
@@ -208,7 +328,7 @@ namespace AI
             {
                 try
                 {
-                    Log.Write("Ева отправляет данные в Google.");
+                    Log.Write("Ева отправляет данные в Google.", Log.Category.Information);
                     WebRequest request = WebRequest.Create("https://www.google.com/speech-api/v1/recognize?xjerr=1&client=chromium&lang=ru-RU");
                     request.Method = "POST";
 
@@ -239,12 +359,17 @@ namespace AI
                     dataStream.Close();
                     response.Close();
 
-                    Log.Write("Ева получила ответ от Google: " + responseFromServer);
+                    Log.Write("Ева получила ответ от Google: " + responseFromServer, Log.Category.Information);
                     return responseFromServer;
                 }
                 catch (Exception error)
                 {
-                    Log.Write(error.Message);
+                    if (ErrorHeard != null)
+                    {
+                        ErrorHeard();
+                    }
+
+                    Log.Write(error.Message, Log.Category.Error);
                 }
             }
 
@@ -288,8 +413,17 @@ namespace AI
 
             MemoryStream stream1 = new MemoryStream(ASCIIEncoding.UTF8.GetBytes(toParse));
 
-            RecognitionResult result = (RecognitionResult)ser.ReadObject(stream1);
-            return result;
+            try
+            {
+                RecognitionResult result = (RecognitionResult)ser.ReadObject(stream1);
+                return result;
+            }
+            catch (SerializationException )
+            {
+                
+            }
+
+            return null;
         }
     }
 
@@ -297,13 +431,5 @@ namespace AI
     {
         public HeardEventArgs(string s) { Text = s; }
         public String Text {get; private set;} // readonly
-    }
-
-    internal class Log
-    {
-        public static void Write(string Text)
-        {
-            Console.WriteLine(Text);
-        }
     }
 }

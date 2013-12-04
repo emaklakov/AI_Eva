@@ -20,6 +20,8 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseVSHostingProcess>false</UseVSHostingProcess>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
@@ -50,6 +52,12 @@
   <ItemGroup>
     <Compile Include="Eva.cs" />
     <Compile Include="Hearing.cs" />
+    <Compile Include="Memory.cs" />
+    <Compile Include="Pitch\CircularBuffer.cs" />
+    <Compile Include="Pitch\Extensions.cs" />
+    <Compile Include="Pitch\IIRFilter.cs" />
+    <Compile Include="Pitch\PitchDsp.cs" />
+    <Compile Include="Pitch\PitchTracker.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Voice.cs" />
   </ItemGroup>

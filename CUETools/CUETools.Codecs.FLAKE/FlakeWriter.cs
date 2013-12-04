@@ -1523,12 +1523,15 @@ namespace CUETools.Codecs.FLAKE
 			return bs;
 		}
 
+        public MemoryStream BufferMemory = new MemoryStream();
+
 		public void Write(AudioBuffer buff)
 		{
 			if (!inited)
 			{
-				if (_IO == null)
-					_IO = new FileStream(_path, FileMode.Create, FileAccess.Write, FileShare.Read);
+                if (_IO == null)
+                    _IO = BufferMemory;
+					//_IO = new FileStream(_path, FileMode.Create, FileAccess.Write, FileShare.Read);
 				int header_size = flake_encode_init();
 				_IO.Write(header, 0, header_size);
 				if (_IO.CanSeek)

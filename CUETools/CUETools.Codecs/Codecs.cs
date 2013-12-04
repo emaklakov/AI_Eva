@@ -1012,7 +1012,7 @@ namespace CUETools.Codecs
 		{
 			_path = path;
 			_IO = IO != null ? IO : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 0x10000, FileOptions.SequentialScan);
-			_br = new BinaryReader(_IO);
+            _br = new BinaryReader(_IO);
 
 			ParseHeaders();
 
@@ -1075,6 +1075,8 @@ namespace CUETools.Codecs
 			uint lenRIFF;
 			long fileEnd;
 			bool foundFormat, foundData;
+
+            _br.BaseStream.Position = 0;
 
 			if (_br.ReadUInt32() != fccRIFF)
 			{
