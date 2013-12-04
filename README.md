@@ -1,4 +1,4 @@
-AI_Eva
+AI: Eva
 ======
 
 AI for smart home: Eva.
